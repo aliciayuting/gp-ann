@@ -10,8 +10,45 @@
 
 #include <parlay/primitives.h>
 
-std::vector<int> BalancedKMeansCall(PointSet& points, int k, double eps) {
-    PointSet centroids = RandomSample(points, k, 555);
+void saveBalancedKMeansCentroids(PointSet& centroids, const std::string& filepath) {
+    std::ofstream out(filepath, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("Failed to open file for writing centroids.");
+    }
+
+    // Write metadata: number of centroids (n) and dimensions (d)
+    uint32_t n = static_cast<uint32_t>(centroids.n);
+    uint32_t d = static_cast<uint32_t>(centroids.d);
+    out.write(reinterpret_cast<const char*>(&n), sizeof(uint32_t));
+    out.write(reinterpret_cast<const char*>(&d), sizeof(uint32_t));
+
+    // Write centroid data
+    out.write(reinterpret_cast<const char*>(centroids.coordinates.data()), centroids.coordinates.size() * sizeof(float));
+
+    out.close();
+    std::cout << "Centroids saved to " << filepath << " with n=" << n << ", d=" << d << std::endl;
+}
+
+void saveBalancedKMeansParitionResults(std::vector<int> partition_result, const std::string& filepath) {
+    std::ofstream out(filepath, std::ios::binary);
+    if (!out) {
+        throw std::runtime_error("Failed to open file for writing partition.");
+    }
+
+    // Write metadata: number of points (n)
+    uint32_t n = static_cast<uint32_t>(partition_result.size());
+    out.write(reinterpret_cast<const char*>(&n), sizeof(uint32_t));
+
+    // Write partition data
+    out.write(reinterpret_cast<const char*>(partition_result.data()), partition_result.size() * sizeof(int));
+
+    out.close();
+    std::cout << "Partition saved to " << filepath << " with n=" << n << std::endl;
+
+}
+
+std::vector<int> BalancedKMeansCall(PointSet& points, int k, double eps, PointSet& centroids) {
+    centroids = RandomSample(points, k, 555);
     size_t max_cluster_size = points.n * (1.0 + eps) / k;
     Timer timer;
     timer.Start();
@@ -35,7 +72,7 @@ void PrintImbalance(std::vector<int>& partition, int k) {
 
 int main(int argc, const char* argv[]) {
     if (argc != 6 && argc != 7) {
-        std::cerr << "Usage ./Partition input-points output-path num-clusters partitioning-method (default|strong) [overlap]" << std::endl;
+        std::cerr << "Usage ./Partition input-points output-filename_prefix num-clusters partitioning-method (default|strong) [overlap]" << std::endl;
         std::abort();
     }
 
@@ -44,7 +81,8 @@ int main(int argc, const char* argv[]) {
     std::string k_str = argv[3];
     int k = std::stoi(k_str);
     std::string part_method = argv[4];
-    std::string part_file = output_file + ".k=" + k_str + "." + part_method;
+    std::string part_file = output_file + ".dat";// + ".k=" + k_str + "." + part_method;
+    std::string centroids_file = output_file + "_centroids.dat";
 
     std::string config = argv[5];
     bool strong = false;
@@ -88,6 +126,7 @@ int main(int argc, const char* argv[]) {
     const double eps = 0.05;
     std::vector<int> partition;
     Clusters clusters;
+    PointSet centroids;  // added to save the generated centroids
     if (part_method == "GP") {
         partition = GraphPartitioning(points, k, eps, strong);
     } else if (part_method == "Pyramid") {
@@ -95,7 +134,7 @@ int main(int argc, const char* argv[]) {
     } else if (part_method == "KMeans") {
         partition = KMeansPartitioning(points, k, eps);
     } else if (part_method == "BalancedKMeans") {
-        partition = BalancedKMeansCall(points, k, eps);
+        partition = BalancedKMeansCall(points, k, eps, centroids);
     } else if (part_method == "FlatKMeans") {
         partition = FlatKMeansCall(points, k, eps);
     } else if (part_method == "RKM") {
@@ -127,7 +166,7 @@ int main(int argc, const char* argv[]) {
     } else if (part_method == "OBKM") {
         int adjusted_num_clusters = std::ceil(k * (1.0 + overlap));
         // use adjusted num clusters for BKM call
-        auto bkm = BalancedKMeansCall(points, adjusted_num_clusters, eps);
+        auto bkm = BalancedKMeansCall(points, adjusted_num_clusters, eps, centroids);
         // but use the original number for the overlap call, so that it chooses the correct max cluster size. The code can handle the case
         // that NumPartsInPartition(bkm) != k
         clusters = OverlappingKMeansPartitioningSPANN(points, bkm, k, eps, overlap);
@@ -140,5 +179,10 @@ int main(int argc, const char* argv[]) {
     if (clusters.empty()) {
         clusters = ConvertPartitionToClusters(partition);
     }
-    WriteClusters(clusters, part_file);
+    // WriteClusters(clusters, part_file);
+    saveBalancedKMeansCentroids(centroids, centroids_file);
+    saveBalancedKMeansParitionResults(partition, part_file);
+
+    return 0;
+
 }
